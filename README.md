@@ -51,6 +51,7 @@ Run with a file listing multiple tokens.
 python3 -m uploadserver -t tokenlist.txt --tokenlist
 ~~~
 
+Uploads will be moved into a sub-folder whose name is the same as the token, so the token should acceptable as a filesystem folder name - E.g. a UUID.
 Uploads without a valid token will be rejected and the temporarily uploaded file will be deleted.
 
 ## Theme Option
