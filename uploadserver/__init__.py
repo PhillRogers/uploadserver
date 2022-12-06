@@ -1,3 +1,23 @@
+# Work in progress. Option by PRogers[at]Enhance.Group to say token is the filename of a token list
+# Notes:
+# Q: Does Validator ever get used? If so, add  the token_list option.
+# SoFar:
+# 2022-12-01
+# Accept multiple tokens from a plain text file.
+# 2022-12-02
+# If token auth fails then wipe the already received temporary file!
+# File uploads not allowed (deleted) if token list is: missing, empty, has blank lines
+# File uploads not allowed (deleted) if token given is a sub-set or super-set of a valid token
+# ToDo:
+# Sanity check the token-based directory name & full path for invalid characters or length
+# Make list reader ignore anything after the first word, to allow comment of internal client name
+# Allow directory name to be specified in the list, optionally.
+# Further development:
+# File size limit? - in a seperate option.
+
+def dbm(msg): # dbm(f'SoFar __LINE__172 var="{val}" ')
+    with open(r'K:\HouseKeeping\!HTTP_upload\HTTPd_root\debug.txt', 'a') as f: f.write(msg+'\n')
+
 import http.server, http, cgi, pathlib, sys, argparse, ssl, os, builtins
 import tempfile
 
@@ -95,7 +115,7 @@ document.getElementsByTagName('form')[0].addEventListener('submit', async e => {
   }
   
   uploadRequest.upload.onprogress = e => {
-    let message = e.loaded === e.total ? 'Saving…' : `${Math.floor(100*e.loaded/e.total)}% [${e.loaded >> 10} / ${e.total >> 10}KiB]`
+    let message = e.loaded === e.total ? 'Saving???' : `${Math.floor(100*e.loaded/e.total)}% [${e.loaded >> 10} / ${e.total >> 10}KiB]`
     document.getElementById("status").textContent = message
   }
   
@@ -160,6 +180,15 @@ def receive_upload(handler):
     if not all(field.file and field.filename for field in fields):
         return (http.HTTPStatus.BAD_REQUEST, 'No files selected')
     
+    token_list = [] # read secure list of multiple tokens
+    if args.token and 'tokenlist' in args and args.tokenlist:
+        try:
+            with open(args.token, 'r') as f:
+                for line in f.readlines():
+                    if len(line.strip()) > 0: # ignore blank lines in token list
+                        token_list.append(line.strip())
+        except: pass # expected but missing token list will not allow upload.
+    
     for field in fields:
         if field.file and field.filename:
             filename = pathlib.Path(field.filename).name
@@ -168,14 +197,21 @@ def receive_upload(handler):
         
         if args.token:
             # server started with token.
-            if 'token' not in form or form['token'].value != args.token:
+            if 'token' not in form or form['token'].value not in token_list:
                 # no token or token error
                 handler.log_message('Upload of "{}" rejected (bad token)'.format(filename))
-                result = (http.HTTPStatus.FORBIDDEN, 'Token is enabled on this server, and your token is missing or wrong')
+                field.file.close() ; os.remove(field.file.name) # delete unwelcome file from invalid sender
+                result = (http.HTTPStatus.FORBIDDEN, 'Tokens are enabled on this server, and your token is missing or wrong')
                 continue # continue so if a multiple file upload is rejected, each file will be logged
         
         if filename:
-            destination = pathlib.Path(args.directory) / filename
+            if token_list: # uploads from each listed token user go into their own folders
+                destination_folder = pathlib.Path(args.directory) / form['token'].value
+                if not os.path.exists(destination_folder):
+                    os.mkdir(destination_folder)
+                destination = destination_folder / filename
+            else:
+                destination = pathlib.Path(args.directory) / filename
             if os.path.exists(destination):
                 if args.allow_replace and os.path.isfile(destination):
                     os.remove(destination)
@@ -366,6 +402,10 @@ def main():
     if sys.version_info.major > 3 or sys.version_info.minor >= 7:
         parser.add_argument('--directory', '-d', default=os.getcwd(),
             help='Specify alternative directory [default:current directory]')
+    
+    # Option by PRogers[at]Enhance.Group to say token is the filename of a token list
+    parser.add_argument('--tokenlist', action='store_true', default=False,
+        help='Token is the filename of a list')
     
     args = parser.parse_args()
     if not hasattr(args, 'directory'): args.directory = os.getcwd()
