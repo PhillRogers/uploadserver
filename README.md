@@ -54,6 +54,16 @@ python3 -m uploadserver -t tokenlist.txt --tokenlist
 Uploads will be moved into a sub-folder whose name is the same as the token, so the token should acceptable as a filesystem folder name - E.g. a UUID.
 Uploads without a valid token will be rejected and the temporarily uploaded file will be deleted.
 
+## Quota Option
+
+Run with a storage limit preventing DoS for other services.
+~~~
+python3 -m uploadserver --quota 100 # in MB, default is 100
+~~~
+
+If an upload causes the destination folder to exceede the quota capacity, that file will be deleted.
+In any case, if an upload causes the destination filesystem uto fill, that file will be deleted.
+
 ## Theme Option
 
 The upload page supports a dark mode for showing white text on black background. If no option is specified, the color scheme is chosen from the client’s browser’s preference (which typically matches their operating system’s setting, if light or dark mode is supported by the OS). To enforce the light or dark theme, the CLI parameter `--theme` can be used:
