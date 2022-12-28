@@ -61,8 +61,8 @@ Run with a storage limit preventing DoS for other services.
 python3 -m uploadserver --quota 100 # in MB, default is 100
 ~~~
 
-If an upload causes the destination folder to exceede the quota capacity, that file will be deleted.
-In any case, if an upload causes the destination filesystem uto fill, that file will be deleted.
+If an upload causes the destination folder to exceede the quota capacity, that file will be deleted.  
+In any case, if an upload causes the destination filesystem to fill, that file will be deleted.  
 
 ## Theme Option
 
