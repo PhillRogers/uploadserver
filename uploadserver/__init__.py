@@ -2,16 +2,20 @@
 # Notes:
 # Q: Does Validator ever get used? If so, add  the token_list option.
 # SoFar:
-# 2022-12-01
+# 2022-12-01    PRogers[at]Enhance.Group
 # Accept multiple tokens from a plain text file.
-# 2022-12-02
+# 2022-12-02    PRogers[at]Enhance.Group
 # If token auth fails then wipe the already received temporary file!
 # File uploads not allowed (deleted) if token list is: missing, empty, has blank lines
 # File uploads not allowed (deleted) if token given is a sub-set or super-set of a valid token
-# 2022-12-23
+# 2022-12-23    PRogers[at]Enhance.Group
 # Initial rough quota enforcement to prevent DoS
 # Take quota (in MB) from command line args with sane default.
+# 2023-01-18    PRogers[at]Enhance.Group
+# Fixed regression deleting unwanted files.
 # ToDo:
+# If received file is *IDENTICAL* to existing file, dont bother with *(1) auto-rename.
+# Check temp purge for auto-renemed files
 # Find how to prevent transfer BEFORE it uses our bandwidth
 # Sanity check the token-based directory name & full path for invalid characters or length
 # Make list reader ignore anything after the first word, to allow comment of internal client name
@@ -19,7 +23,7 @@
 # Further development:
 # File size limit? - in a seperate option.
 
-def dbm(msg): # dbm(f'SoFar __LINE__18 var="{val}" ')
+def dbm(msg): # dbm(f'SoFar __LINE__26 var="{val}" ')
     with open(r'K:\HouseKeeping\!HTTP_upload\HTTPd_root\debug.txt', 'a') as f: f.write(msg+'\n')
 
 def get_directory_size(directory):
@@ -183,6 +187,7 @@ def auto_rename(path):
     raise FileExistsError(f'File {path} already exists.')
 
 def validate_token(handler):
+    dbm(f'SoFar __LINE__190 ')
     form = PersistentFieldStorage(fp=handler.rfile, headers=handler.headers, environ={'REQUEST_METHOD': 'POST'})
     if args.token:
         # server started with token.
@@ -218,21 +223,26 @@ def receive_upload(handler):
         except: pass # expected but missing token list will not allow upload.
     
     for field in fields:
+        dbm(f'SoFar __LINE__226 field:"{field}" ')
         if field.file and field.filename:
             filename = pathlib.Path(field.filename).name
         else:
             filename = None
         
         if args.token:
+            dbm(f'SoFar __LINE__233  ')
             # server started with token.
             if 'token' not in form or form['token'].value not in token_list:
+                dbm('SoFar __LINE__236 recd token:"{0}" '.format(form['token'].value))
                 # no token or token error
                 handler.log_message('Upload of "{}" rejected (bad token)'.format(filename))
-                field.file.close() ; field.file.delete() # os.remove(field.file.name) # delete unwelcome file from invalid sender
+                # field.file.close() ; field.file.delete() # no, bad. maybe worth investigation
+                field.file.close() ; os.remove(field.file.name) # delete unwelcome file from invalid sender
                 result = (http.HTTPStatus.FORBIDDEN, 'Tokens are enabled on this server, and your token is missing or wrong')
                 continue # continue so if a multiple file upload is rejected, each file will be logged
         
         if filename:
+            dbm(f'SoFar __LINE__245 filename="{filename}" ')
             if token_list: # uploads from each listed token user go into their own folders
                 destination_folder = pathlib.Path(args.directory) / form['token'].value
                 if not os.path.exists(destination_folder):
@@ -240,6 +250,7 @@ def receive_upload(handler):
             else:
                 destination_folder = pathlib.Path(args.directory)
             destination = destination_folder / filename
+            dbm(f'SoFar __LINE__253 destination="{destination}" ')
             if os.path.exists(destination):
                 if args.allow_replace and os.path.isfile(destination):
                     os.remove(destination)
@@ -256,23 +267,24 @@ def receive_upload(handler):
             if args.quota: # Option by PRogers[at]Enhance.Group to prevent DoS
                 quota = args.quota * (1024 * 1024) # MB specified on command line
             else:
-                quota = 100 * (1024 * 1024)
+                quota = 100 * (1024 * 1024) # 100MB
+            dbm(f'SoFar __LINE__271 quota="{quota}" ')
             if quota: # Option by PRogers[at]Enhance.Group to prevent DoS
                 # so_uploaded = os.path.getsize(destination) # size of the received file. unknown until received.
-                # dbm(f'SoFar __LINE__256 so_ul="{so_uploaded}" ')
+                # dbm(f'SoFar __LINE__274 so_ul="{so_uploaded}" ')
                 import shutil
                 so_fsfree = shutil.disk_usage('.')[2]
-                # dbm(f'SoFar __LINE__259 so_fsf="{so_fsfree}" ')
+                dbm(f'SoFar __LINE__277 so_fsf="{so_fsfree}" ')
                 if so_fsfree < 4096: quota = 0 # assuming 4k sector size is lowest unit of allocation
-                # dbm(f'SoFar __LINE__261 quota="{quota}" ')
+                dbm(f'SoFar __LINE__279 quota="{quota}" ')
                 # file system is out of space! Force delete of this upload.
                 so_destination_folder = get_directory_size(destination_folder)
-                # dbm(f'SoFar __LINE__264 so_df="{so_destination_folder}" ')
+                dbm(f'SoFar __LINE__282 so_df="{so_destination_folder}" ')
                 if so_destination_folder >= quota:
-                    # dbm(f'SoFar __LINE__266 folder exceeds quota')
-                    handler.log_message('Upload of "{}" rejected (quota exceeded)'.format(filename))
+                    dbm(f'SoFar __LINE__284 folder exceeds quota')
+                    handler.log_message('Upload of "{}" rejected (quota reached)'.format(filename))
                     if os.path.isfile(destination): os.remove(destination) # delete unwelcome file of exessive size
-                    result = (http.HTTPStatus.FORBIDDEN, 'Quota has been exceeded')
+                    result = (http.HTTPStatus.FORBIDDEN, 'Quota has been reached')
                     continue # there may be other smaller files.
             
             handler.log_message(f'[Uploaded] "{filename}" --> {destination}')
@@ -367,6 +379,7 @@ def ssl_wrap(socket):
 
 def serve_forever():
     # Verify arguments in case the method was called directly
+    assert hasattr(args, 'quota') and type(args.quota) is int
     assert hasattr(args, 'port') and type(args.port) is int
     assert hasattr(args, 'cgi') and type(args.cgi) is bool
     assert hasattr(args, 'allow_replace') and type(args.allow_replace) is bool
