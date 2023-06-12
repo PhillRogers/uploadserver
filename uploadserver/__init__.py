@@ -19,21 +19,30 @@
 # Move debug file from hard-coded to folder above argument directory.
 # 2023-01-20    PRogers[at]Enhance.Group
 # Add transfer log.  Add timestamp to logs.
+# 2023-01-25    PRogers[at]Enhance.Group
+# Move log(destination) to after the dedupe & quota check.
+# Make tokenlist TAB-separated so reader can ignore anything after the first, allowing comment mailto etc.
+# 2023-05-24    PRogers[at]Enhance.Group
+# Dissable logging file content as it causes tilt if multiple files are selected for upload
 # ToDo:
-# Show the sender some incication of succesfull upload.
-# Find how to prevent transfer BEFORE it uses our bandwidth
+# Update to latest upstream code with Basic Authentication
+# Find how to prevent transfer BEFORE it uses our bandwidth (resolved by above)
+# Show the sender some indication of succesfull upload.
 # Sanity check the token-based directory name & full path for characters or length which would be invalid for the file system
-# Make tokenlist reader ignore anything after the first word, to allow comment of internal client name
-# Allow directory name to be specified in the list, optionally.
-# Further development:
-# File size limit? - in a seperate option.
+# File size limit? - in a separate option.
 
-def dbm(msg): # dbm(f'SoFar __LINE__31 var="{val}" ')
+def dbm(msg): # dbm(f'SoFar __LINE__34 var="{val}" ')
     debug_file = pathlib.Path(args.directory) / '../debug.txt'
     if os.path.isfile(debug_file):
         import datetime
         ts = datetime.datetime.now().replace(microsecond=0).isoformat(' ')
         with open(debug_file, 'a') as f: f.write(ts+'\t'+msg+'\n')
+
+def dbf(msg,content): # dbm('SoFar __LINE__41 ', val)
+    import datetime
+    ts = datetime.datetime.now().replace(microsecond=0).isoformat(' ')
+    debug_file = pathlib.Path(args.directory) / '../debug-'+ts+'.txt'
+    with open(debug_file, 'wb') as f: f.write(content)
 
 def log(dst): # log(full_destination_path)
     transfer_log = pathlib.Path(args.directory) / '../transfer.log'
@@ -213,7 +222,7 @@ def auto_rename(path):
     raise FileExistsError(f'File {path} already exists.')
 
 def validate_token(handler):
-    dbm(f'SoFar __LINE__216 ')
+    dbm(f'SoFar __LINE__225 ')
     form = PersistentFieldStorage(fp=handler.rfile, headers=handler.headers, environ={'REQUEST_METHOD': 'POST'})
     if args.token:
         # server started with token.
@@ -225,63 +234,78 @@ def validate_token(handler):
     return (http.HTTPStatus.NO_CONTENT, 'Token validation successful (no token required)')
 
 def receive_upload(handler):
-    dbm(f'SoFar __LINE__228  ')
+    dbm(f'SoFar __LINE__237  ')
     result = (http.HTTPStatus.INTERNAL_SERVER_ERROR, 'Server error')
     name_conflict = False
     
     form = PersistentFieldStorage(fp=handler.rfile, headers=handler.headers, environ={'REQUEST_METHOD': 'POST'})
     if 'files' not in form:
+        dbm(f'SoFar __LINE__243  ')
+        # dbf('SoFar __LINE__244 ', str(form))
+        dbm(f'SoFar __LINE__245  ')
         return (http.HTTPStatus.BAD_REQUEST, 'Field "files" not found')
     
+    dbm(f'SoFar __LINE__248  ')
     fields = form['files']
     if not isinstance(fields, list):
         fields = [fields]
+        dbm(f'SoFar __LINE__252  ')
     
+    dbm(f'SoFar __LINE__254  ')
     if not all(field.file and field.filename for field in fields):
+        dbm(f'SoFar __LINE__256  ')
         return (http.HTTPStatus.BAD_REQUEST, 'No files selected')
     
-    dbm(f'SoFar __LINE__243  ')
+    dbm(f'SoFar __LINE__259  ')
     token_list = [] # read secure list of multiple tokens
     if args.token and 'tokenlist' in args and args.tokenlist:
         try:
             with open(args.token, 'r') as f:
                 for line in f.readlines():
                     if len(line.strip()) > 0: # ignore blank lines in token list
-                        token_list.append(line.strip())
+                        tokenlist_flds = line.strip().split('\t')
+                        token_list.append(tokenlist_flds[0].strip())
+                        if len(tokenlist_flds)>1:
+                            dbm(f'SoFar __LINE__269 tokenlist_flds: {len(tokenlist_flds)} ') # mailto,destination
         except: pass # expected but missing token list will not allow upload.
-        dbm(f'SoFar __LINE__252 tokens: {len(token_list)} ')
+        dbm(f'SoFar __LINE__271 tokens: {len(token_list)} ')
     
     for field in fields:
-        dbm(f'SoFar __LINE__255  ')
+        dbm(f'SoFar __LINE__274  ')
         if field.file and field.filename:
             filename = pathlib.Path(field.filename).name
         else:
             filename = None
+
+        for form_field in form:
+            if form_field != "files": dbm(f'SoFar __LINE__281 form_field "{form_field}" has value "{form[form_field].value}"')
+            # else: dbm(f'SoFar __LINE__282 form_field "{form_field}" has length "{len(form[form_field].value)}"')
+            # WARNING the above line causes tilt if multiple files are selected for upload
         
-        dbm(f'SoFar __LINE__261  ')
+        dbm(f'SoFar __LINE__284 filename: "{filename}" ')
         if args.token:
-            dbm('SoFar __LINE__263 recd token: '+form['token'].value)
+            dbm(f'SoFar __LINE__286 recd token: "{form["token"].value}" ')
             # server started with token.
             if 'token' not in form or form['token'].value not in token_list:
-                dbm('SoFar __LINE__266 recd token: '+form['token'].value)
+                dbm(f'SoFar __LINE__289 recd token: "{form["token"].value}" ')
                 # no token or token error
                 handler.log_message('Upload of "{}" rejected (bad token)'.format(filename))
-                dbm('SoFar __LINE__269  ')
+                dbm('SoFar __LINE__292  ')
                 field.file.close()
-                dbm('SoFar __LINE__271  ')
+                dbm('SoFar __LINE__294  ')
                 if hasattr(field.file, 'name'):
-                    dbm(f'SoFar __LINE__273  tmp name: "{field.file.name}" ')
+                    dbm(f'SoFar __LINE__296  tmp name: "{field.file.name}" ')
                     if os.path.isfile(field.file.name):
-                        dbm(f'SoFar __LINE__275  tmp name: "{field.file.name}" ')
+                        dbm(f'SoFar __LINE__298  tmp name: "{field.file.name}" ')
                         os.remove(field.file.name) # delete unwelcome file from invalid sender
                         # field.file.close() ; field.file.delete() # no, bad. maybe worth investigation
-                dbm('SoFar __LINE__278  ')
+                dbm('SoFar __LINE__301  ')
                 result = (http.HTTPStatus.FORBIDDEN, 'Tokens are enabled on this server, and your token is missing or wrong')
-                dbm('SoFar __LINE__280  ')
+                dbm('SoFar __LINE__303  ')
                 continue # continue so if a multiple file upload is rejected, each file will be logged
         
         if filename:
-            dbm(f'SoFar __LINE__284 filename="{filename}" ')
+            dbm(f'SoFar __LINE__307 filename="{filename}" ')
             if token_list: # uploads from each listed token user go into their own folders
                 destination_folder = pathlib.Path(args.directory) / form['token'].value
                 if not os.path.exists(destination_folder):
@@ -289,60 +313,60 @@ def receive_upload(handler):
             else:
                 destination_folder = pathlib.Path(args.directory)
             destination = destination_folder / filename
-            dbm(f'SoFar __LINE__292 destination="{destination}" ')
-            log(destination)
+            dbm(f'SoFar __LINE__315 destination="{destination}" ')
             if hasattr(field.file, 'name'):
                 source = field.file.name
                 field.file.close()
-                dbm(f'SoFar __LINE__297 source:"{source}" ')
+                dbm(f'SoFar __LINE__319 source:"{source}" ')
             else:  # class '_io.BytesIO', small file (< 1000B, in cgi.py), in-memory buffer.
                 tfh,source = tempfile.mkstemp(suffix='.tmp', prefix='uploadserver~', dir='.', text=False)
                 bytes_written = os.write(tfh, field.file.read())
                 os.close(tfh)
-                dbm(f'SoFar __LINE__302 source:"{source}" ')
+                dbm(f'SoFar __LINE__324 source:"{source}" ')
             # check for identical source & destination to skip & save space.
             if os.path.exists(destination):
-                dbm(f'SoFar __LINE__305 source file size = {os.path.getsize(source)}')
+                dbm(f'SoFar __LINE__327 source file size = {os.path.getsize(source)}')
                 if os.path.getsize(source) == os.path.getsize(destination):
-                    dbm(f'SoFar __LINE__307  ')
+                    dbm(f'SoFar __LINE__329  ')
                     source_hash = hash_file(source)
-                    dbm(f'SoFar __LINE__309 source hash: {source_hash} ')
+                    dbm(f'SoFar __LINE__331 source hash: {source_hash} ')
                     destination_hash = hash_file(destination)
-                    dbm(f'SoFar __LINE__311 destination hash: {destination_hash} ')
+                    dbm(f'SoFar __LINE__333 destination hash: {destination_hash} ')
                     if source_hash == destination_hash:
-                        dbm(f'SoFar __LINE__313 hash match')
+                        dbm(f'SoFar __LINE__335 hash match')
                         os.remove(source)
                         result = (http.HTTPStatus.BAD_REQUEST, 'Identical file already exists')
                         continue
-                dbm(f'SoFar __LINE__317  ')
+                dbm(f'SoFar __LINE__339  ')
                 if args.allow_replace and os.path.isfile(destination):
                     os.remove(destination)
-                    dbm(f'SoFar __LINE__320  ')
+                    dbm(f'SoFar __LINE__342  ')
                 else:
                     destination = auto_rename(destination)
                     name_conflict = True
-                    dbm(f'SoFar __LINE__324  ')
-            dbm(f'SoFar __LINE__325  ')
+                    dbm(f'SoFar __LINE__346  ')
+            dbm(f'SoFar __LINE__347  ')
             os.rename(source, destination)
             if args.quota: # Option by PRogers[at]Enhance.Group to prevent DoS
                 quota = args.quota * (1024 * 1024) # MB specified on command line
-                dbm(f'SoFar __LINE__329 quota="{quota}" ')
+                dbm(f'SoFar __LINE__351 quota="{quota}" ')
                 # so_uploaded = os.path.getsize(destination) # size of the received file. unknown until received.
-                # dbm(f'SoFar __LINE__331 so_ul="{so_uploaded}" ')
+                # dbm(f'SoFar __LINE__353 so_ul="{so_uploaded}" ')
                 import shutil
                 so_fsfree = shutil.disk_usage('.')[2]
-                dbm(f'SoFar __LINE__334 so_fsf="{so_fsfree}" ')
+                dbm(f'SoFar __LINE__356 so_fsf="{so_fsfree}" ')
                 if so_fsfree < 4096: quota = 0 # assuming 4k sector size is lowest unit of allocation
-                dbm(f'SoFar __LINE__336 quota="{quota}" ')
+                dbm(f'SoFar __LINE__358 quota="{quota}" ')
                 # file system is out of space! Force delete of this upload.
                 so_destination_folder = get_directory_size(destination_folder)
-                dbm(f'SoFar __LINE__339 so_df="{so_destination_folder}" ')
+                dbm(f'SoFar __LINE__361 so_df="{so_destination_folder}" ')
                 if so_destination_folder >= quota:
-                    dbm(f'SoFar __LINE__341 folder exceeds quota')
+                    dbm(f'SoFar __LINE__363 folder exceeds quota')
                     handler.log_message('Upload of "{}" rejected (quota reached)'.format(filename))
                     if os.path.isfile(destination): os.remove(destination) # delete unwelcome file of exessive size
                     result = (http.HTTPStatus.FORBIDDEN, 'Quota has been reached - upload deleted')
                     continue # there may be other smaller files.
+            log(destination)
             
             handler.log_message(f'[Uploaded] "{filename}" --> {destination}')
             result = (http.HTTPStatus.NO_CONTENT, 'Some filename(s) changed due to name conflict' if name_conflict else 'Files accepted')
