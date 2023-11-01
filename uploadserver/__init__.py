@@ -1,6 +1,6 @@
 # Work in progress. Option by PRogers[at]Enhance.Group to say token is the filename of a token list
 # Notes:
-# Q: Does Validator ever get used? If so, add  the token_list option.
+# Q: Does Validator ever get used? If so, add the token_list option.
 # SoFar:
 # 2022-12-01    PRogers[at]Enhance.Group
 # Accept multiple tokens from a plain text file.
@@ -24,21 +24,30 @@
 # Make tokenlist TAB-separated so reader can ignore anything after the first, allowing comment mailto etc.
 # 2023-05-24    PRogers[at]Enhance.Group
 # Dissable logging file content as it causes tilt if multiple files are selected for upload
+# 2023-10-30    PRogers[at]Enhance.Group
+# WIP - Add 'Basic Authentication' & 'Put' from latest upstream code
 # ToDo:
-# Update to latest upstream code with Basic Authentication
+# Try an external index.html based on the new internal HTML
 # Find how to prevent transfer BEFORE it uses our bandwidth (resolved by above)
 # Show the sender some indication of succesfull upload.
 # Sanity check the token-based directory name & full path for characters or length which would be invalid for the file system
 # File size limit? - in a separate option.
 
-def dbm(msg): # dbm(f'SoFar __LINE__34 var="{val}" ')
+import http.server, http, cgi, pathlib, sys, argparse, ssl, os, builtins
+import tempfile, base64, binascii, functools, contextlib
+
+# Does not seem to do be used, but leaving this import out causes uploadserver to not receive IPv4 requests when
+# started with default options under Windows
+import socket 
+
+def dbm(msg): # dbm(f'SoFar __LINE__43 var="{val}" ')
     debug_file = pathlib.Path(args.directory) / '../debug.txt'
     if os.path.isfile(debug_file):
         import datetime
         ts = datetime.datetime.now().replace(microsecond=0).isoformat(' ')
         with open(debug_file, 'a') as f: f.write(ts+'\t'+msg+'\n')
 
-def dbf(msg,content): # dbm('SoFar __LINE__41 ', val)
+def dbf(msg,content): # dbm('SoFar __LINE__50 ', val)
     import datetime
     ts = datetime.datetime.now().replace(microsecond=0).isoformat(' ')
     debug_file = pathlib.Path(args.directory) / '../debug-'+ts+'.txt'
@@ -85,35 +94,28 @@ def hash_file(filename):
            h.update(chunk)
     return h.hexdigest()
 
-import http.server, http, cgi, pathlib, sys, argparse, ssl, os, builtins
-import tempfile
-
-# Does not seem to do be used, but leaving this import out causes uploadserver to not receive IPv4 requests when
-# started with default options under Windows
-import socket 
-
 if sys.version_info.major > 3 or sys.version_info.minor >= 7:
     import functools
 
 if sys.version_info.major > 3 or sys.version_info.minor >= 8:
     import contextlib
 
-CSS = {
-    'light': '',
-    'auto': '''<style type="text/css">
-@media (prefers-color-scheme: dark) {
-  body {
-    background-color: #000;
-    color: #fff;
-  }
-}
-</style>''',
-    'dark': '''<style type="text/css">
-body {
-  background-color: #000;
-  color: #fff;
-}
-</style>'''
+def validate_token(handler):
+    dbm(f'SoFar __LINE__104 ')
+    form = PersistentFieldStorage(fp=handler.rfile, headers=handler.headers, environ={'REQUEST_METHOD': 'POST'})
+    if args.token:
+        # server started with token.
+        if 'token' not in form or form['token'].value != args.token:
+            # no token or token error
+            handler.log_message('Token rejected (bad token)')
+            return (http.HTTPStatus.FORBIDDEN, 'Token is enabled on this server, and your token is missing or wrong')
+        return (http.HTTPStatus.NO_CONTENT, 'Token validation successful (good token)')
+    return (http.HTTPStatus.NO_CONTENT, 'Token validation successful (no token required)')
+
+COLOR_SCHEME = {
+    'light': 'light',
+    'auto': 'light dark',
+    'dark': 'dark',
 }
 
 def get_upload_page(theme):
@@ -121,16 +123,13 @@ def get_upload_page(theme):
 <html>
 <head>
 <title>File Upload</title>
-<meta name="viewport" content="width=device-width, user-scalable=no" />''' \
-    + CSS.get(theme) + '''
+<meta name="viewport" content="width=device-width, user-scalable=no" />
+<meta name="color-scheme" content="''' + COLOR_SCHEME.get(theme) + '''">
 </head>
 <body>
 <h1>File Upload</h1>
 <form action="upload" method="POST" enctype="multipart/form-data">
 <input name="files" type="file" multiple />
-<br />
-<br />
-Token (only needed if server was started with token option): <input name="token" type="text" />
 <br />
 <br />
 <input type="submit" />
@@ -139,33 +138,9 @@ Token (only needed if server was started with token option): <input name="token"
 <p id="status"></p>
 </body>
 <script>
-document.getElementsByName('token')[0].value=localStorage.token || ''
-
 document.getElementsByTagName('form')[0].addEventListener('submit', async e => {
   e.preventDefault()
   
-  localStorage.token = e.target.token.value
-  
-  const tokenValidationFormData = new FormData()
-  tokenValidationFormData.append('token', e.target.token.value)
-  
-  let tokenValidationResponse;
-  try {
-    tokenValidationResponse = await fetch('/upload/validateToken', { method: 'POST', body: tokenValidationFormData})
-  } catch (e) {
-    tokenValidationResponse = {
-      ok: false,
-      status: "Token validation unsuccessful",
-      statusText: e.message,
-    }
-  }
-  
-  if (!tokenValidationResponse.ok) {
-    let message = `${tokenValidationResponse.status}: ${tokenValidationResponse.statusText}`
-    document.getElementById('status').textContent = message
-    return
-  }
-  message = `Success: ${tokenValidationResponse.statusText}`
   const uploadFormData = new FormData(e.target)
   const filenames = uploadFormData.getAll('files').map(v => v.name).join(', ')
   const uploadRequest = new XMLHttpRequest()
@@ -221,42 +196,30 @@ def auto_rename(path):
             return renamed_path
     raise FileExistsError(f'File {path} already exists.')
 
-def validate_token(handler):
-    dbm(f'SoFar __LINE__225 ')
-    form = PersistentFieldStorage(fp=handler.rfile, headers=handler.headers, environ={'REQUEST_METHOD': 'POST'})
-    if args.token:
-        # server started with token.
-        if 'token' not in form or form['token'].value != args.token:
-            # no token or token error
-            handler.log_message('Token rejected (bad token)')
-            return (http.HTTPStatus.FORBIDDEN, 'Token is enabled on this server, and your token is missing or wrong')
-        return (http.HTTPStatus.NO_CONTENT, 'Token validation successful (good token)')
-    return (http.HTTPStatus.NO_CONTENT, 'Token validation successful (no token required)')
-
 def receive_upload(handler):
-    dbm(f'SoFar __LINE__237  ')
+    dbm(f'SoFar __LINE__200  ')
     result = (http.HTTPStatus.INTERNAL_SERVER_ERROR, 'Server error')
     name_conflict = False
     
     form = PersistentFieldStorage(fp=handler.rfile, headers=handler.headers, environ={'REQUEST_METHOD': 'POST'})
     if 'files' not in form:
-        dbm(f'SoFar __LINE__243  ')
-        # dbf('SoFar __LINE__244 ', str(form))
-        dbm(f'SoFar __LINE__245  ')
+        dbm(f'SoFar __LINE__206  ')
+        # dbf('SoFar __LINE__207 ', str(form))
+        dbm(f'SoFar __LINE__208  ')
         return (http.HTTPStatus.BAD_REQUEST, 'Field "files" not found')
     
-    dbm(f'SoFar __LINE__248  ')
+    dbm(f'SoFar __LINE__211  ')
     fields = form['files']
     if not isinstance(fields, list):
         fields = [fields]
-        dbm(f'SoFar __LINE__252  ')
+        dbm(f'SoFar __LINE__215  ')
     
-    dbm(f'SoFar __LINE__254  ')
+    dbm(f'SoFar __LINE__217  ')
     if not all(field.file and field.filename for field in fields):
-        dbm(f'SoFar __LINE__256  ')
+        dbm(f'SoFar __LINE__219  ')
         return (http.HTTPStatus.BAD_REQUEST, 'No files selected')
     
-    dbm(f'SoFar __LINE__259  ')
+    dbm(f'SoFar __LINE__222  ')
     token_list = [] # read secure list of multiple tokens
     if args.token and 'tokenlist' in args and args.tokenlist:
         try:
@@ -266,46 +229,46 @@ def receive_upload(handler):
                         tokenlist_flds = line.strip().split('\t')
                         token_list.append(tokenlist_flds[0].strip())
                         if len(tokenlist_flds)>1:
-                            dbm(f'SoFar __LINE__269 tokenlist_flds: {len(tokenlist_flds)} ') # mailto,destination
+                            dbm(f'SoFar __LINE__232 tokenlist_flds: {len(tokenlist_flds)} ') # mailto,destination
         except: pass # expected but missing token list will not allow upload.
-        dbm(f'SoFar __LINE__271 tokens: {len(token_list)} ')
+        dbm(f'SoFar __LINE__234 tokens: {len(token_list)} ')
     
     for field in fields:
-        dbm(f'SoFar __LINE__274  ')
+        dbm(f'SoFar __LINE__237  ')
         if field.file and field.filename:
             filename = pathlib.Path(field.filename).name
         else:
             filename = None
 
         for form_field in form:
-            if form_field != "files": dbm(f'SoFar __LINE__281 form_field "{form_field}" has value "{form[form_field].value}"')
-            # else: dbm(f'SoFar __LINE__282 form_field "{form_field}" has length "{len(form[form_field].value)}"')
+            if form_field != "files": dbm(f'SoFar __LINE__244 form_field "{form_field}" has value "{form[form_field].value}"')
+            # else: dbm(f'SoFar __LINE__245 form_field "{form_field}" has length "{len(form[form_field].value)}"')
             # WARNING the above line causes tilt if multiple files are selected for upload
         
-        dbm(f'SoFar __LINE__284 filename: "{filename}" ')
+        dbm(f'SoFar __LINE__248 filename: "{filename}" ')
         if args.token:
-            dbm(f'SoFar __LINE__286 recd token: "{form["token"].value}" ')
+            dbm(f'SoFar __LINE__250 recd token: "{form["token"].value}" ')
             # server started with token.
             if 'token' not in form or form['token'].value not in token_list:
-                dbm(f'SoFar __LINE__289 recd token: "{form["token"].value}" ')
+                dbm(f'SoFar __LINE__253 recd token: "{form["token"].value}" ')
                 # no token or token error
                 handler.log_message('Upload of "{}" rejected (bad token)'.format(filename))
-                dbm('SoFar __LINE__292  ')
+                dbm('SoFar __LINE__256  ')
                 field.file.close()
-                dbm('SoFar __LINE__294  ')
+                dbm('SoFar __LINE__258  ')
                 if hasattr(field.file, 'name'):
-                    dbm(f'SoFar __LINE__296  tmp name: "{field.file.name}" ')
+                    dbm(f'SoFar __LINE__260  tmp name: "{field.file.name}" ')
                     if os.path.isfile(field.file.name):
-                        dbm(f'SoFar __LINE__298  tmp name: "{field.file.name}" ')
+                        dbm(f'SoFar __LINE__262  tmp name: "{field.file.name}" ')
                         os.remove(field.file.name) # delete unwelcome file from invalid sender
                         # field.file.close() ; field.file.delete() # no, bad. maybe worth investigation
-                dbm('SoFar __LINE__301  ')
+                dbm('SoFar __LINE__265  ')
                 result = (http.HTTPStatus.FORBIDDEN, 'Tokens are enabled on this server, and your token is missing or wrong')
-                dbm('SoFar __LINE__303  ')
+                dbm('SoFar __LINE__267  ')
                 continue # continue so if a multiple file upload is rejected, each file will be logged
         
         if filename:
-            dbm(f'SoFar __LINE__307 filename="{filename}" ')
+            dbm(f'SoFar __LINE__271 filename="{filename}" ')
             if token_list: # uploads from each listed token user go into their own folders
                 destination_folder = pathlib.Path(args.directory) / form['token'].value
                 if not os.path.exists(destination_folder):
@@ -313,55 +276,55 @@ def receive_upload(handler):
             else:
                 destination_folder = pathlib.Path(args.directory)
             destination = destination_folder / filename
-            dbm(f'SoFar __LINE__315 destination="{destination}" ')
+            dbm(f'SoFar __LINE__279 destination="{destination}" ')
             if hasattr(field.file, 'name'):
                 source = field.file.name
                 field.file.close()
-                dbm(f'SoFar __LINE__319 source:"{source}" ')
+                dbm(f'SoFar __LINE__283 source:"{source}" ')
             else:  # class '_io.BytesIO', small file (< 1000B, in cgi.py), in-memory buffer.
                 tfh,source = tempfile.mkstemp(suffix='.tmp', prefix='uploadserver~', dir='.', text=False)
                 bytes_written = os.write(tfh, field.file.read())
                 os.close(tfh)
-                dbm(f'SoFar __LINE__324 source:"{source}" ')
+                dbm(f'SoFar __LINE__288 source:"{source}" ')
             # check for identical source & destination to skip & save space.
             if os.path.exists(destination):
-                dbm(f'SoFar __LINE__327 source file size = {os.path.getsize(source)}')
+                dbm(f'SoFar __LINE__291 source file size = {os.path.getsize(source)}')
                 if os.path.getsize(source) == os.path.getsize(destination):
-                    dbm(f'SoFar __LINE__329  ')
+                    dbm(f'SoFar __LINE__293  ')
                     source_hash = hash_file(source)
-                    dbm(f'SoFar __LINE__331 source hash: {source_hash} ')
+                    dbm(f'SoFar __LINE__295 source hash: {source_hash} ')
                     destination_hash = hash_file(destination)
-                    dbm(f'SoFar __LINE__333 destination hash: {destination_hash} ')
+                    dbm(f'SoFar __LINE__297 destination hash: {destination_hash} ')
                     if source_hash == destination_hash:
-                        dbm(f'SoFar __LINE__335 hash match')
+                        dbm(f'SoFar __LINE__299 hash match')
                         os.remove(source)
                         result = (http.HTTPStatus.BAD_REQUEST, 'Identical file already exists')
                         continue
-                dbm(f'SoFar __LINE__339  ')
+                dbm(f'SoFar __LINE__303  ')
                 if args.allow_replace and os.path.isfile(destination):
                     os.remove(destination)
-                    dbm(f'SoFar __LINE__342  ')
+                    dbm(f'SoFar __LINE__306  ')
                 else:
                     destination = auto_rename(destination)
                     name_conflict = True
-                    dbm(f'SoFar __LINE__346  ')
-            dbm(f'SoFar __LINE__347  ')
+                    dbm(f'SoFar __LINE__310  ')
+            dbm(f'SoFar __LINE__311  ')
             os.rename(source, destination)
             if args.quota: # Option by PRogers[at]Enhance.Group to prevent DoS
                 quota = args.quota * (1024 * 1024) # MB specified on command line
-                dbm(f'SoFar __LINE__351 quota="{quota}" ')
+                dbm(f'SoFar __LINE__315 quota="{quota}" ')
                 # so_uploaded = os.path.getsize(destination) # size of the received file. unknown until received.
-                # dbm(f'SoFar __LINE__353 so_ul="{so_uploaded}" ')
+                # dbm(f'SoFar __LINE__317 so_ul="{so_uploaded}" ')
                 import shutil
                 so_fsfree = shutil.disk_usage('.')[2]
-                dbm(f'SoFar __LINE__356 so_fsf="{so_fsfree}" ')
+                dbm(f'SoFar __LINE__320 so_fsf="{so_fsfree}" ')
                 if so_fsfree < 4096: quota = 0 # assuming 4k sector size is lowest unit of allocation
-                dbm(f'SoFar __LINE__358 quota="{quota}" ')
+                dbm(f'SoFar __LINE__322 quota="{quota}" ')
                 # file system is out of space! Force delete of this upload.
                 so_destination_folder = get_directory_size(destination_folder)
-                dbm(f'SoFar __LINE__361 so_df="{so_destination_folder}" ')
+                dbm(f'SoFar __LINE__325 so_df="{so_destination_folder}" ')
                 if so_destination_folder >= quota:
-                    dbm(f'SoFar __LINE__363 folder exceeds quota')
+                    dbm(f'SoFar __LINE__327 folder exceeds quota')
                     handler.log_message('Upload of "{}" rejected (quota reached)'.format(filename))
                     if os.path.isfile(destination): os.remove(destination) # delete unwelcome file of exessive size
                     result = (http.HTTPStatus.FORBIDDEN, 'Quota has been reached - upload deleted')
@@ -373,12 +336,66 @@ def receive_upload(handler):
     
     return result
 
+def check_http_authentication_header(handler, auth):
+    auth_header = handler.headers.get('Authorization')
+    if auth_header is None:
+        return (False, 'No credentials given')
+    
+    auth_header_words = auth_header.split(' ')
+    if len(auth_header_words) != 2:
+        return (False, 'Credentials incorrectly formatted')
+    
+    if auth_header_words[0].lower() != 'basic':
+        return (False, 'Credentials incorrectly formatted')
+    
+    try:
+        http_username_password = base64.b64decode(auth_header_words[1]).decode()
+    except binascii.Error:
+        return (False, 'Credentials incorrectly formatted')
+    
+    http_username, http_password = http_username_password.split(':', 2)
+    args_username, args_password = auth.split(':', 2)
+    if http_username != args_username: return (False, 'Bad username')
+    if http_password != args_password: return (False, 'Bad password')
+    
+    return (True, None)
+
+def check_http_authentication(handler):
+    """
+        This function should be called in at the beginning of HTTP method handler.
+        It validates Authorization header and sends back 401 response on failure.
+        It returns False if this happens.
+    """
+    if handler.path == '/upload':
+        auth = args.basic_auth or args.basic_auth_upload
+    else:
+        auth = args.basic_auth
+    
+    # If no auth settings apply, check always passes
+    if not auth: return True
+    
+    valid, message = check_http_authentication_header(handler, auth)
+    
+    if not valid:
+        handler.log_message(f'Request rejected ({message})')
+        handler.send_response(http.HTTPStatus.UNAUTHORIZED, message)
+        handler.send_header('WWW-Authenticate', 'Basic realm="uploadserver"')
+        handler.end_headers()
+    
+    return valid
+
 class SimpleHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        if self.path == '/upload': send_upload_page(self)
-        else: http.server.SimpleHTTPRequestHandler.do_GET(self)
+        if not check_http_authentication(self): return
+        
+        if self.path == '/upload':
+            send_upload_page(self)
+        else:
+            super().do_GET()
     
     def do_POST(self):
+        if not check_http_authentication(self): return
+        
         if self.path in ['/upload', '/upload/validateToken']:
             if self.path == '/upload/validateToken':
                 result = validate_token(self)
@@ -391,13 +408,22 @@ class SimpleHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(result[0], result[1])
         else:
             self.send_error(http.HTTPStatus.NOT_FOUND, 'Can only POST to /upload')
+    
+    def do_PUT(self):
+        self.do_POST()
 
 class CGIHTTPRequestHandler(http.server.CGIHTTPRequestHandler):
     def do_GET(self):
-        if self.path == '/upload': send_upload_page(self)
-        else: http.server.CGIHTTPRequestHandler.do_GET(self)
+        if not check_http_authentication(self): return
+        
+        if self.path == '/upload':
+            send_upload_page(self)
+        else:
+            super().do_GET()
     
     def do_POST(self):
+        if not check_http_authentication(self): return
+        
         if self.path in ['/upload', '/upload/validateToken']:
             if self.path == '/upload/validateToken':
                 result = validate_token(self)
@@ -409,7 +435,10 @@ class CGIHTTPRequestHandler(http.server.CGIHTTPRequestHandler):
             else:
                 self.send_error(result[0], result[1])
         else:
-            http.server.CGIHTTPRequestHandler.do_POST(self)
+            super().do_POST()
+    
+    def do_PUT(self):
+        self.do_POST()
 
 def intercept_first_print():
     if args.server_certificate:
@@ -460,15 +489,17 @@ def ssl_wrap(socket):
 
 def serve_forever():
     # Verify arguments in case the method was called directly
-    assert hasattr(args, 'quota') and type(args.quota) is int
     assert hasattr(args, 'port') and type(args.port) is int
     assert hasattr(args, 'cgi') and type(args.cgi) is bool
     assert hasattr(args, 'allow_replace') and type(args.allow_replace) is bool
     assert hasattr(args, 'bind')
-    assert hasattr(args, 'token')
     assert hasattr(args, 'theme')
     assert hasattr(args, 'server_certificate')
     assert hasattr(args, 'client_certificate')
+    assert hasattr(args, 'basic_auth')
+    assert hasattr(args, 'basic_auth_upload')
+    assert hasattr(args, 'token')
+    assert hasattr(args, 'quota') and type(args.quota) is int
     assert hasattr(args, 'directory') and type(args.directory) is str
     
     if args.cgi:
@@ -533,14 +564,18 @@ def main():
         help='Replace existing file if uploaded file has the same name. Auto rename by default.')
     parser.add_argument('--bind', '-b', default=bind_default, metavar='ADDRESS',
         help='Specify alternate bind address [default: all interfaces]')
-    parser.add_argument('--token', '-t', type=str,
-        help='Specify alternate token [default: \'\']')
     parser.add_argument('--theme', type=str, default='auto',
         choices=['light', 'auto', 'dark'], help='Specify a light or dark theme for the upload page [default: auto]')
     parser.add_argument('--server-certificate', '--certificate', '-c',
         help='Specify HTTPS server certificate to use [default: none]')
     parser.add_argument('--client-certificate',
         help='Specify HTTPS client certificate to accept for mutual TLS [default: none]')
+    parser.add_argument('--basic-auth',
+        help='Specify user:pass for basic authentication (downloads and uploads)')
+    parser.add_argument('--basic-auth-upload',
+        help='Specify user:pass for basic authentication (uploads only)')
+    parser.add_argument('--token', '-t', type=str,
+        help='Specify alternate token [default: \'\']')
     
     # Directory option was added to http.server in Python 3.7
     if sys.version_info.major > 3 or sys.version_info.minor >= 7:
@@ -557,5 +592,9 @@ def main():
     
     args = parser.parse_args()
     if not hasattr(args, 'directory'): args.directory = os.getcwd()
+    
+    if args.basic_auth and args.basic_auth_upload:
+        print('Cannot set both --basic--auth and --basic-auth-upload')
+        sys.exit(6)
     
     serve_forever()
